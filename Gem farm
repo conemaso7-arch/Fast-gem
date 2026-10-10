@@ -1,0 +1,543 @@
+
+```lua
+-- Made by TheAnonymous in RScript / Theultimateuser in Scriptblox
+-- Modificado com sistema de Delay + Rejoin forçado + Múltiplos Geradores + 8 Fuels + Auto Combat
+ 
+-- Feel free to adjust
+-- The ultimate solo gem farming (Slapped some stuff with AI so no hate :) )
+-- Remember to put this into auto-execution folder or smth, each run is completed in around 25-35 seconds so 2-2.4 gems/min
+-- This is FREE and KEYLESS
+-- You shall not copy this code and add key system on top of it for pure greediness. Don't be like Racky in Rscript where he tries to make money off from mine without adding new stuff LOL (seriously, add some unique stuff that makes it worth the trouble)
+-- You can modify it and give credits, it's fine :PP
+ 
+-- The script works like this: finds fuels to upgrade the generator -> go fix the closest power plant (main way to get gem)
+print("Loading")
+print("[ UPDATE ] Changed the movement function so it's burst speed so it should be faster than original one")
+print("[ UPDATE ] Added configurable delay before Rejoin/Play Again")
+print("[ UPDATE ] Added Multi-Generator support (fixes multiple power boxes per run)")
+print("[ UPDATE ] Configured to collect 8 Fuels per run")
+print("[ UPDATE ] Added Auto Combat System (detects and attacks zombies)")
+print("Tell me in Rscript or Scriptblox if there are any bugs")
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+ 
+local ContentProvider = game:GetService("ContentProvider")
+while ContentProvider.RequestQueueSize > 0 do
+    task.wait(0.5)
+end
+ 
+print("The game is loaded in. Wait more for things to fully load")
+task.wait(6.0)
+print("Complete! Starting the farm.")
+ 
+-- SERVICES --
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+ 
+-- --- CONFIGURATION & REFERENCES ---
+local REJOIN_DELAY = 5
+local MAX_FUELS_TO_COLLECT = 8
+local MAX_GENERATORS_TO_FIX = 2
+local AUTO_COMBAT_ENABLED = true -- ⚙️ Ligar/desligar combate automático
+local WEAPON_NAME = "Bat" -- ⚙️ Nome da arma no inventário (mude para o nome exato do bastão/arma)
+local ATTACK_RANGE = 8 -- ⚙️ Distância para atacar zumbis
+local ATTACK_COOLDOWN = 0.3 -- ⚙️ Tempo entre ataques
+
+local LocalPlayer = Players.LocalPlayer
+local MapFolder = Workspace:FindFirstChild("Map")
+local DroppedItemsFolder = Workspace:WaitForChild("DroppedItems")
+local AdjustBackpackRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Tools"):WaitForChild("AdjustBackpack")
+local PlayAgainRemote = ReplicatedStorage.Remotes.Misc:FindFirstChild("VotePlayAgain")
+local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+ 
+local cachedGeneratorLocation = nil
+local PermanentNoclipEnabled = true
+ 
+-- --- Safety First Lads You gotta be the sneakiest to be the ultimate gem grinder ---
+local function evacuateServer(reason)
+    warn("[CRITICAL EVACUATION]: " .. reason)
+    task.spawn(function()
+        if PlayAgainRemote and PlayAgainRemote:IsA("RemoteEvent") then
+            pcall(function()
+                PlayAgainRemote:FireServer()
+            end)
+            print("ESCAPING BY PLAYING AGAIN")
+            task.wait(1.0)
+        end
+        LocalPlayer:Kick("[WARNING] UNKNOWN PLAYER DETECTED!")
+    end)
+    error("Script execution terminated.")
+end
+ 
+-- --- BACKGROUND SERVICE: PERMANENT NOCLIP ENGINE ---
+local function StartPermanentNoclip()
+    local noclipConnection = nil
+ 
+    local function ConnectNoclip()
+        if noclipConnection then noclipConnection:Disconnect() end
+ 
+        noclipConnection = RunService.Stepped:Connect(function()
+            if not PermanentNoclipEnabled then
+                if noclipConnection then noclipConnection:Disconnect() end
+                return
+            end
+ 
+            if character then
+                for _, child in ipairs(character:GetDescendants()) do
+                    if child:IsA("BasePart") and child.CanCollide then
+                        child.CanCollide = false
+                    end
+                end
+ 
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                end
+            end
+        end)
+    end
+ 
+    ConnectNoclip()
+ 
+    LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(0.1)
+        ConnectNoclip()
+    end)
+end
+ 
+StartPermanentNoclip()
+
+-- --- AUTO COMBAT SYSTEM ---
+local function findZombies()
+    local zombies = {}
+    local playerCharacters = {}
+    
+    -- Coletar todos os personagens de jogadores
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Character then
+            table.insert(playerCharacters, player.Character)
+        end
+    end
+    
+    -- Procurar em todo o Workspace por modelos com Humanoid
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+            local humanoid = obj:FindFirstChildOfClass("Humanoid")
+            
+            -- Verificar se está vivo
+            if humanoid and humanoid.Health > 0 then
+                -- Verificar se NÃO é um personagem de jogador
+                local isPlayer = false
+                for _, playerChar in ipairs(playerCharacters) do
+                    if obj == playerChar then
+                        isPlayer = true
+                        break
+                    end
+                end
+                
+                -- Se não é jogador, é zumbi
+                if not isPlayer then
+                    table.insert(zombies, obj)
+                end
+            end
+        end
+    end
+    
+    return zombies
+end
+
+local function equipWeapon()
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then return false end
+    
+    -- Procurar a arma específica primeiro
+    local weapon = backpack:FindFirstChild(WEAPON_NAME)
+    
+    -- Se não achar, procurar qualquer Tool
+    if not weapon then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                weapon = item
+                break
+            end
+        end
+    end
+    
+    if weapon then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid:EquipTool(weapon)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function attackZombie(zombie)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local zombieHrp = zombie:FindFirstChild("HumanoidRootPart")
+    
+    if not hrp or not zombieHrp then return false end
+    
+    local distance = (hrp.Position - zombieHrp.Position).Magnitude
+    
+    if distance <= ATTACK_RANGE then
+        -- Tentar atacar usando firetouchinterest
+        local tool = character:FindFirstChildOfClass("Tool")
+        if tool then
+            local handle = tool:FindFirstChild("Handle")
+            if handle then
+                pcall(function()
+                    firetouchinterest(handle, zombieHrp, 0)
+                    task.wait(0.05)
+                    firetouchinterest(handle, zombieHrp, 1)
+                end)
+                return true
+            end
+        end
+        
+        -- Fallback: tentar encontrar RemoteEvent de ataque
+        local attackRemote = ReplicatedStorage:FindFirstChild("Attack", true) or 
+                           ReplicatedStorage:FindFirstChild("Combat", true) or
+                           ReplicatedStorage:FindFirstChild("Hit", true)
+        
+        if attackRemote and attackRemote:IsA("RemoteEvent") then
+            pcall(function()
+                attackRemote:FireServer(zombie)
+            end)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function startAutoCombat()
+    task.spawn(function()
+        while AUTO_COMBAT_ENABLED do
+            if character and character.Parent then
+                local zombies = findZombies()
+                
+                if #zombies > 0 then
+                    -- Equipar arma se não estiver equipado
+                    local currentTool = character:FindFirstChildOfClass("Tool")
+                    if not currentTool then
+                        equipWeapon()
+                        task.wait(0.3)
+                    end
+                    
+                    -- Atacar o zumbi mais próximo
+                    local hrp = character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local closestZombie = nil
+                        local shortestDist = math.huge
+                        
+                        for _, zombie in ipairs(zombies) do
+                            local zombieHrp = zombie:FindFirstChild("HumanoidRootPart")
+                            if zombieHrp then
+                                local dist = (hrp.Position - zombieHrp.Position).Magnitude
+                                if dist < shortestDist then
+                                    shortestDist = dist
+                                    closestZombie = zombie
+                                end
+                            end
+                        end
+                        
+                        if closestZombie then
+                            attackZombie(closestZombie)
+                        end
+                    end
+                end
+            end
+            
+            task.wait(ATTACK_COOLDOWN)
+        end
+    end)
+end
+
+-- Iniciar sistema de combate
+startAutoCombat()
+print("[Auto Combat] Sistema de combate automático ativado!")
+ 
+-- Find the closest fuel's location
+local excludeFuel = {}
+ 
+local function getClosestFuelPosition(currentPos)
+    local foundValidFuel = nil
+ 
+    while not foundValidFuel do
+        local bestTarget = nil
+        local shortestDistance = math.huge
+ 
+        if DroppedItemsFolder then
+            for _, item in ipairs(DroppedItemsFolder:GetChildren()) do
+                if item.Name == "Fuel" then
+                    if not excludeFuel[item] then
+                        local fuelPos = item:GetPivot().Position
+                        local dist = (currentPos - fuelPos).Magnitude
+ 
+                        if dist < shortestDistance then
+                            shortestDistance = dist
+                            bestTarget = item
+                        end
+                    end
+                end
+            end
+        end
+ 
+        if not bestTarget then
+            break
+        end
+ 
+        local targetPosition = bestTarget:GetPivot().Position
+        local heightDifference = targetPosition.Y - currentPos.Y
+ 
+        if heightDifference <= 2 then
+            foundValidFuel = bestTarget
+        else
+            print("[-] Fuel anomaly detected at height: " .. tostring(targetPosition.Y) .. ". Excluding item.")
+            excludeFuel[bestTarget] = true
+        end
+    end
+ 
+    return foundValidFuel
+end
+ 
+local function getGeneratorPosition()
+    if cachedGeneratorLocation then return cachedGeneratorLocation end
+    if MapFolder then
+        local tiles = MapFolder:FindFirstChild("Tiles")
+        if tiles then
+            for _, child in ipairs(tiles:GetChildren()) do
+                if child.Name == "Generator" or child:FindFirstChild("Generator") then
+                    cachedGeneratorLocation = child:GetPivot().Position
+                    return cachedGeneratorLocation
+                end
+            end
+        end
+    end
+    local fallbackGen = Workspace:FindFirstChild("Generator", true)
+    if fallbackGen then
+        cachedGeneratorLocation = fallbackGen:GetPivot().Position
+        return cachedGeneratorLocation
+    end
+    return nil
+end
+ 
+local function FuelTeleport(hrp, targetFuel)
+    local generatorLoc = getGeneratorPosition()
+    if not hrp or not targetFuel or not generatorLoc then return end
+ 
+    local fuelUnion = targetFuel:FindFirstChild("Union") or targetFuel.PrimaryPart
+    local itemDrag = targetFuel:FindFirstChild("ItemDrag")
+    local networkRemote = itemDrag and itemDrag:FindFirstChild("RequestNetworkOwnership")
+ 
+    if fuelUnion and networkRemote then
+        pcall(function()
+            networkRemote:FireServer(fuelUnion)
+        end)
+        task.wait(0.12) 
+        pcall(function()
+            targetFuel:PivotTo(CFrame.new(generatorLoc) + Vector3.new(0, 1, 0))
+        end)
+        task.wait(0.15) 
+    end
+end
+ 
+-- TRAVEL COMPONENT
+local function adaptiveCrawlTo(targetPos, humanoidRootPart, character)
+    local finalTarget = targetPos + Vector3.new(0, 3, 0)
+ 
+    local BURST_SPEED = 75
+    local SLOW_SPEED = 7
+    local CLEARANCE_COOLDOWN = 0.5  
+    local SLOW_ZONE_DURATION = 0.35
+    local lastWallDetectedTime = 0
+    local lockedYHeight = humanoidRootPart.Position.Y
+ 
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = {character} 
+ 
+    local heartbeatEvent = RunService.Heartbeat
+ 
+    while true do
+        if not humanoidRootPart or not humanoidRootPart.Parent then break end
+ 
+        local deltaTime = heartbeatEvent:Wait()
+ 
+        local currentPos = humanoidRootPart.Position
+        local flatTarget = Vector3.new(finalTarget.X, lockedYHeight, finalTarget.Z)
+        local remainingVector = flatTarget - currentPos
+        local totalDistance = remainingVector.Magnitude
+ 
+        if totalDistance <= 2.0 then
+            humanoidRootPart.CFrame = CFrame.new(finalTarget)
+            humanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, -5, 0) 
+            humanoidRootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            humanoidRootPart.Anchored = true
+            task.wait(0.05)
+            humanoidRootPart.Anchored = false 
+            break
+        end
+ 
+        local direction = remainingVector.Unit
+        local lookAheadDistance = 5
+        local rayResult = workspace:Raycast(currentPos, direction * lookAheadDistance, raycastParams)
+ 
+        if rayResult and rayResult.Instance and rayResult.Instance.CanCollide then
+            lastWallDetectedTime = os.clock()
+        end
+ 
+        local currentAllowedSpeed = SLOW_SPEED
+ 
+        if os.clock() - lastWallDetectedTime >= CLEARANCE_COOLDOWN then
+            local serverTime = workspace:GetServerTimeNow()
+            local currentSecondFraction = serverTime % 1.0
+ 
+            if currentSecondFraction < (1.0 - SLOW_ZONE_DURATION) then
+                currentAllowedSpeed = BURST_SPEED
+            end
+        end
+ 
+        local frameTravelDistance = currentAllowedSpeed * deltaTime
+ 
+        if frameTravelDistance > totalDistance then
+            frameTravelDistance = totalDistance
+        end
+ 
+        local nextPosition = currentPos + (direction * frameTravelDistance)
+        local flattenedPosition = Vector3.new(nextPosition.X, lockedYHeight, nextPosition.Z)
+ 
+        humanoidRootPart.CFrame = CFrame.new(flattenedPosition)
+    end
+end
+ 
+-- --- PIPELINE EXECUTION ENGINE ---
+local function runPipeline()
+    print("Free and Keyless, script is in https://pastebin.com/V0wHqZe4")
+    local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+ 
+    print("[Pipeline] Initiating Complete Sequence...")
+    task.wait(0.3)
+ 
+    -- STEP 1: MULTI-FUEL COLLECTION LOOP
+    print("[Step 1] Initiating Fuel Collection Sequence (Target: " .. MAX_FUELS_TO_COLLECT .. " fuels)...")
+    local fuelsCollected = 0
+    
+    for i = 1, MAX_FUELS_TO_COLLECT do
+        local fuel = getClosestFuelPosition(humanoidRootPart.Position)
+        if fuel then
+            print("[Step 1." .. i .. "] Moving to fuel " .. i .. "...")
+            adaptiveCrawlTo(fuel:GetPivot().Position, humanoidRootPart, character)
+            task.wait(0.3)
+            FuelTeleport(humanoidRootPart, fuel)
+            task.wait(0.5)
+            fuelsCollected = fuelsCollected + 1
+        else
+            print("[Step 1] No more valid fuels found. Collected " .. fuelsCollected .. "/" .. MAX_FUELS_TO_COLLECT .. ".")
+            break
+        end
+    end
+ 
+    -- STEP 2: OPTIMIZED POWER BOX QUERY & TRACKING (MULTI-GENERATOR SUPPORT)
+    print("[Step 2] Scanning for closest Power Box models...")
+    local powerBoxData = {}
+    local interactionSuccess = false
+
+    if MapFolder and MapFolder:FindFirstChild("Tiles") then
+        for _, child in ipairs(MapFolder.Tiles:GetChildren()) do
+            if child.Name == "Power Plant" then
+                local powerBox = child:FindFirstChild("Power Box")
+                if powerBox and powerBox:IsA("Model") then
+                    table.insert(powerBoxData, {
+                        Instance = powerBox,
+                        Position = powerBox:GetPivot().Position
+                    })
+                end
+            end
+        end
+    end
+
+    if #powerBoxData > 0 then
+        local currentPos = humanoidRootPart.Position
+        table.sort(powerBoxData, function(a, b)
+            return (currentPos - a.Position).Magnitude < (currentPos - b.Position).Magnitude
+        end)
+
+        local limit = math.min(MAX_GENERATORS_TO_FIX, #powerBoxData)
+        
+        for i = 1, limit do
+            local chosenBox = powerBoxData[i].Instance
+            local finalBoxTarget = powerBoxData[i].Position
+
+            print("[Step 2." .. i .. "] Crawling directly to Power Box " .. i .. "...")
+            adaptiveCrawlTo(finalBoxTarget, humanoidRootPart, character)
+            task.wait(0.5)
+
+            if (humanoidRootPart.Position - finalBoxTarget).Magnitude < 15 then
+                local prompt = chosenBox:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt then
+                    for j = 1, 3 do
+                        if fireproximityprompt then
+                            fireproximityprompt(prompt)
+                        else
+                            prompt:InputHoldBegin()
+                            task.wait(prompt.HoldDuration + 0.05)
+                            prompt:InputHoldEnd()
+                        end
+                        task.wait(0.1)
+                    end
+                    print("[Pipeline] Interaction successfully forced on Power Box " .. i .. "!")
+                    interactionSuccess = true
+                end
+            end
+            task.wait(0.5)
+        end
+    end
+ 
+    -- --- VOTE PLAY AGAIN / REJOIN SEQUENCE ---
+    if interactionSuccess then
+        print("[Pipeline] Ciclo concluído! Aguardando " .. REJOIN_DELAY .. " segundos antes do Rejoin...")
+        task.wait(REJOIN_DELAY)
+        
+        local rejoinSuccess = false
+        if PlayAgainRemote and PlayAgainRemote:IsA("RemoteEvent") then
+            pcall(function()
+                PlayAgainRemote:FireServer()
+            end)
+            print("[Play Again] Sequência executada com sucesso.")
+            rejoinSuccess = true
+        end
+
+        if not rejoinSuccess then
+            print("[Fallback] Remote falhou ou não encontrado. Tentando Rejoin forçado via TeleportService...")
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+            end)
+        end
+        print("Free and Keyless, script is in https://pastebin.com/V0wHqZe4")
+    end
+end
+ 
+-- [ Background Tasks ]
+ 
+if #Players:GetPlayers() > 1 then
+    evacuateServer("Pre-existing player DETECTED!")
+end
+ 
+Players.PlayerAdded:Connect(function(newPlayer)
+    if newPlayer ~= LocalPlayer then
+        evacuateServer("Player entry detected (" .. newPlayer.Name .. "). Executing immediate escape.")
+    end
+end)
+ 
+task.spawn(function()
+    task.wait(60.0)
+    print("[AVISO!] Tempo limite da partida atingido. Aguardando " .. REJOIN_DELAY .. " segundos antes
