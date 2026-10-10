@@ -1,0 +1,572 @@
+-- Made by TheAnonymous in RScript / Theultimateuser in Scriptblox
+-- Modificado para Mobile + UI Fixada + Delay Ajustado
+
+print("Loading")
+print("[ UPDATE ] Fixed UI for Mobile")
+print("[ UPDATE ] Added cycle control (how many times to repeat before rejoin)")
+print("[ UPDATE ] Increased delay after Power Box collection")
+print("Tell me in Rscript or Scriptblox if there are any bugs")
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+ 
+local ContentProvider = game:GetService("ContentProvider")
+while ContentProvider.RequestQueueSize > 0 do
+    task.wait(0.5)
+end
+ 
+print("The game is loaded in. Wait more for things to fully load")
+task.wait(6.0)
+print("Complete! Starting the farm.")
+ 
+-- SERVICES --
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+ 
+-- --- CONFIGURATION & REFERENCES ---
+local REJOIN_DELAY = 10 -- ⚙️ Aumentado para 10 segundos
+local MAX_FUELS_TO_COLLECT = 8
+local MAX_GENERATORS_TO_FIX = 2
+local MAX_CYCLES_BEFORE_REJOIN = 3 -- ⚙️ Quantos ciclos fazer antes de sair (coletar fuels + consertar geradores)
+local AUTO_COMBAT_ENABLED = true
+local WEAPON_NAME = "Bat"
+local ATTACK_RANGE = 10
+local ATTACK_COOLDOWN = 0.5
+
+local LocalPlayer = Players.LocalPlayer
+local MapFolder = Workspace:FindFirstChild("Map")
+local DroppedItemsFolder = Workspace:WaitForChild("DroppedItems")
+local AdjustBackpackRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Tools"):WaitForChild("AdjustBackpack")
+local PlayAgainRemote = ReplicatedStorage.Remotes.Misc:FindFirstChild("VotePlayAgain")
+local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+ 
+local cachedGeneratorLocation = nil
+local PermanentNoclipEnabled = true
+ 
+-- --- UI CREATION (MOBILE FRIENDLY) ---
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "SurviveApocalypseFarmUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 280, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -140, 0.5, -200)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 10)
+UICorner.Parent = MainFrame
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(80, 80, 100)
+UIStroke.Thickness = 2
+UIStroke.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 50)
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+Title.Text = "🎮 Farm Config"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 20
+Title.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 10)
+TitleCorner.Parent = Title
+
+local ScrollingFrame = Instance.new("ScrollingFrame")
+ScrollingFrame.Size = UDim2.new(1, -20, 1, -70)
+ScrollingFrame.Position = UDim2.new(0, 10, 0, 60)
+ScrollingFrame.BackgroundTransparency = 1
+ScrollingFrame.ScrollBarThickness = 6
+ScrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 120)
+ScrollingFrame.Parent = MainFrame
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Padding = UDim.new(0, 10)
+UIListLayout.Parent = ScrollingFrame
+
+-- Função para criar inputs (mobile friendly)
+local function createConfigInput(name, defaultValue)
+    local Container = Instance.new("Frame")
+    Container.Size = UDim2.new(1, 0, 0, 60)
+    Container.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    Container.BorderSizePixel = 0
+    Container.Parent = ScrollingFrame
+
+    local ContainerCorner = Instance.new("UICorner")
+    ContainerCorner.CornerRadius = UDim.new(0, 6)
+    ContainerCorner.Parent = Container
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -10, 0, 25)
+    Label.Position = UDim2.new(0, 5, 0, 5)
+    Label.BackgroundTransparency = 1
+    Label.Text = name
+    Label.TextColor3 = Color3.fromRGB(200, 200, 220)
+    Label.Font = Enum.Font.GothamSemibold
+    Label.TextSize = 14
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.Parent = Container
+
+    local TextBox = Instance.new("TextBox")
+    TextBox.Size = UDim2.new(1, -20, 0, 25)
+    TextBox.Position = UDim2.new(0, 10, 0, 30)
+    TextBox.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+    TextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TextBox.Font = Enum.Font.Gotham
+    TextBox.TextSize = 14
+    TextBox.Text = tostring(defaultValue)
+    TextBox.PlaceholderText = "Digite o valor..."
+    TextBox.Parent = Container
+
+    local TextBoxCorner = Instance.new("UICorner")
+    TextBoxCorner.CornerRadius = UDim.new(0, 4)
+    TextBoxCorner.Parent = TextBox
+
+    return TextBox
+end
+
+-- Função para criar toggle (mobile friendly)
+local function createToggle(name, defaultValue)
+    local Container = Instance.new("Frame")
+    Container.Size = UDim2.new(1, 0, 0, 50)
+    Container.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    Container.BorderSizePixel = 0
+    Container.Parent = ScrollingFrame
+
+    local ContainerCorner = Instance.new("UICorner")
+    ContainerCorner.CornerRadius = UDim.new(0, 6)
+    ContainerCorner.Parent = Container
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(0.6, 0, 1, 0)
+    Label.Position = UDim2.new(0, 10, 0, 0)
+    Label.BackgroundTransparency = 1
+    Label.Text = name
+    Label.TextColor3 = Color3.fromRGB(200, 200, 220)
+    Label.Font = Enum.Font.GothamSemibold
+    Label.TextSize = 14
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.Parent = Container
+
+    local ToggleButton = Instance.new("TextButton")
+    ToggleButton.Size = UDim2.new(0, 80, 0, 35)
+    ToggleButton.Position = UDim2.new(1, -90, 0.5, -17.5)
+    ToggleButton.BackgroundColor3 = defaultValue and Color3.fromRGB(0, 180, 0) or Color3.fromRGB(180, 0, 0)
+    ToggleButton.Text = defaultValue and "✅ ON" or "❌ OFF"
+    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleButton.Font = Enum.Font.GothamBold
+    ToggleButton.TextSize = 14
+    ToggleButton.Parent = Container
+
+    local ToggleCorner = Instance.new("UICorner")
+    ToggleCorner.CornerRadius = UDim.new(0, 6)
+    ToggleCorner.Parent = ToggleButton
+
+    local enabled = defaultValue
+    ToggleButton.MouseButton1Click:Connect(function()
+        enabled = not enabled
+        ToggleButton.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 0) or Color3.fromRGB(180, 0, 0)
+        ToggleButton.Text = enabled and "✅ ON" or "❌ OFF"
+    end)
+
+    return function() return enabled end
+end
+
+-- Criar inputs
+local rejoinDelayInput = createConfigInput("⏱️ Delay Rejoin (seg)", REJOIN_DELAY)
+local maxFuelsInput = createConfigInput("⛽ Max Fuels", MAX_FUELS_TO_COLLECT)
+local maxGensInput = createConfigInput("🔧 Max Geradores", MAX_GENERATORS_TO_FIX)
+local maxCyclesInput = createConfigInput("🔄 Ciclos antes de sair", MAX_CYCLES_BEFORE_REJOIN)
+local weaponNameInput = createConfigInput("🔫 Nome da Arma", WEAPON_NAME)
+local autoCombatToggle = createToggle("⚔️ Auto Combat", AUTO_COMBAT_ENABLED)
+
+-- Botão de aplicar
+local ApplyButton = Instance.new("TextButton")
+ApplyButton.Size = UDim2.new(1, 0, 0, 45)
+ApplyButton.BackgroundColor3 = Color3.fromRGB(50, 120, 220)
+ApplyButton.Text = "💾 APLICAR CONFIGURAÇÕES"
+ApplyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ApplyButton.Font = Enum.Font.GothamBold
+ApplyButton.TextSize = 16
+ApplyButton.Parent = ScrollingFrame
+
+local ApplyCorner = Instance.new("UICorner")
+ApplyCorner.CornerRadius = UDim.new(0, 8)
+ApplyCorner.Parent = ApplyButton
+
+ApplyButton.MouseButton1Click:Connect(function()
+    REJOIN_DELAY = tonumber(rejoinDelayInput.Text) or 10
+    MAX_FUELS_TO_COLLECT = tonumber(maxFuelsInput.Text) or 8
+    MAX_GENERATORS_TO_FIX = tonumber(maxGensInput.Text) or 2
+    MAX_CYCLES_BEFORE_REJOIN = tonumber(maxCyclesInput.Text) or 3
+    WEAPON_NAME = weaponNameInput.Text
+    AUTO_COMBAT_ENABLED = autoCombatToggle()
+    
+    print("[UI] ✅ Configurações aplicadas!")
+    print("  Rejoin Delay: " .. REJOIN_DELAY .. "s")
+    print("  Max Fuels: " .. MAX_FUELS_TO_COLLECT)
+    print("  Max Generators: " .. MAX_GENERATORS_TO_FIX)
+    print("  Cycles before rejoin: " .. MAX_CYCLES_BEFORE_REJOIN)
+    print("  Weapon: " .. WEAPON_NAME)
+    print("  Auto Combat: " .. tostring(AUTO_COMBAT_ENABLED))
+end)
+
+-- Botão de fechar UI
+local CloseButton = Instance.new("TextButton")
+CloseButton.Size = UDim2.new(0, 40, 0, 40)
+CloseButton.Position = UDim2.new(1, -45, 0, 5)
+CloseButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseButton.Text = "✕"
+CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.TextSize = 20
+CloseButton.Parent = Title
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 20)
+CloseCorner.Parent = CloseButton
+
+CloseButton.MouseButton1Click:Connect(function()
+    ScreenGui.Enabled = not ScreenGui.Enabled
+end)
+
+local function evacuateServer(reason)
+    warn("[CRITICAL EVACUATION]: " .. reason)
+    task.spawn(function()
+        if PlayAgainRemote and PlayAgainRemote:IsA("RemoteEvent") then
+            pcall(function()
+                PlayAgainRemote:FireServer()
+            end)
+            print("ESCAPING BY PLAYING AGAIN")
+            task.wait(1.0)
+        end
+        LocalPlayer:Kick("[WARNING] UNKNOWN PLAYER DETECTED!")
+    end)
+    error("Script execution terminated.")
+end
+ 
+local function StartPermanentNoclip()
+    local noclipConnection = nil
+ 
+    local function ConnectNoclip()
+        if noclipConnection then noclipConnection:Disconnect() end
+ 
+        noclipConnection = RunService.Stepped:Connect(function()
+            if not PermanentNoclipEnabled then
+                if noclipConnection then noclipConnection:Disconnect() end
+                return
+            end
+ 
+            if character then
+                for _, child in ipairs(character:GetDescendants()) do
+                    if child:IsA("BasePart") and child.CanCollide then
+                        child.CanCollide = false
+                    end
+                end
+ 
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                end
+            end
+        end)
+    end
+ 
+    ConnectNoclip()
+ 
+    LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(0.1)
+        ConnectNoclip()
+    end)
+end
+ 
+StartPermanentNoclip()
+
+-- --- AUTO COMBAT SYSTEM ---
+local function findZombies()
+    local zombies = {}
+    local playerCharacters = {}
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Character then
+            table.insert(playerCharacters, player.Character)
+        end
+    end
+    
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+            local humanoid = obj:FindFirstChildOfClass("Humanoid")
+            
+            if humanoid and humanoid.Health > 0 then
+                local isPlayer = false
+                for _, playerChar in ipairs(playerCharacters) do
+                    if obj == playerChar then
+                        isPlayer = true
+                        break
+                    end
+                end
+                
+                if not isPlayer then
+                    table.insert(zombies, obj)
+                end
+            end
+        end
+    end
+    
+    return zombies
+end
+
+local function equipWeapon()
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then return false end
+    
+    local weapon = backpack:FindFirstChild(WEAPON_NAME)
+    if not weapon then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                weapon = item
+                break
+            end
+        end
+    end
+    
+    if weapon then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid:EquipTool(weapon)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function attackZombie(zombie)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local zombieHrp = zombie:FindFirstChild("HumanoidRootPart")
+    
+    if not hrp or not zombieHrp then return false end
+    
+    local distance = (hrp.Position - zombieHrp.Position).Magnitude
+    
+    if distance <= ATTACK_RANGE then
+        local tool = character:FindFirstChildOfClass("Tool")
+        if tool then
+            local handle = tool:FindFirstChild("Handle")
+            if handle then
+                pcall(function()
+                    firetouchinterest(handle, zombieHrp, 0)
+                    task.wait(0.05)
+                    firetouchinterest(handle, zombieHrp, 1)
+                end)
+                return true
+            end
+        end
+        
+        local attackRemote = ReplicatedStorage:FindFirstChild("Attack", true) or 
+                           ReplicatedStorage:FindFirstChild("Combat", true) or
+                           ReplicatedStorage:FindFirstChild("Hit", true)
+        
+        if attackRemote and attackRemote:IsA("RemoteEvent") then
+            pcall(function()
+                attackRemote:FireServer(zombie)
+            end)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function startAutoCombat()
+    task.spawn(function()
+        while AUTO_COMBAT_ENABLED do
+            if character and character.Parent then
+                local zombies = findZombies()
+                
+                if #zombies > 0 then
+                    local currentTool = character:FindFirstChildOfClass("Tool")
+                    if not currentTool then
+                        equipWeapon()
+                        task.wait(0.3)
+                    end
+                    
+                    local hrp = character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local closestZombie = nil
+                        local shortestDist = math.huge
+                        
+                        for _, zombie in ipairs(zombies) do
+                            local zombieHrp = zombie:FindFirstChild("HumanoidRootPart")
+                            if zombieHrp then
+                                local dist = (hrp.Position - zombieHrp.Position).Magnitude
+                                if dist < shortestDist then
+                                    shortestDist = dist
+                                    closestZombie = zombie
+                                end
+                            end
+                        end
+                        
+                        if closestZombie then
+                            attackZombie(closestZombie)
+                        end
+                    end
+                end
+            end
+            
+            task.wait(ATTACK_COOLDOWN)
+        end
+    end)
+end
+
+startAutoCombat()
+ 
+local excludeFuel = {}
+ 
+local function getClosestFuelPosition(currentPos)
+    local foundValidFuel = nil
+ 
+    while not foundValidFuel do
+        local bestTarget = nil
+        local shortestDistance = math.huge
+ 
+        if DroppedItemsFolder then
+            for _, item in ipairs(DroppedItemsFolder:GetChildren()) do
+                if item.Name == "Fuel" then
+                    if not excludeFuel[item] then
+                        local fuelPos = item:GetPivot().Position
+                        local dist = (currentPos - fuelPos).Magnitude
+ 
+                        if dist < shortestDistance then
+                            shortestDistance = dist
+                            bestTarget = item
+                        end
+                    end
+                end
+            end
+        end
+ 
+        if not bestTarget then
+            break
+        end
+ 
+        local targetPosition = bestTarget:GetPivot().Position
+        local heightDifference = targetPosition.Y - currentPos.Y
+ 
+        if heightDifference <= 2 then
+            foundValidFuel = bestTarget
+        else
+            print("[-] Fuel anomaly detected at height: " .. tostring(targetPosition.Y) .. ". Excluding item.")
+            excludeFuel[bestTarget] = true
+        end
+    end
+ 
+    return foundValidFuel
+end
+ 
+local function getGeneratorPosition()
+    if cachedGeneratorLocation then return cachedGeneratorLocation end
+    if MapFolder then
+        local tiles = MapFolder:FindFirstChild("Tiles")
+        if tiles then
+            for _, child in ipairs(tiles:GetChildren()) do
+                if child.Name == "Generator" or child:FindFirstChild("Generator") then
+                    cachedGeneratorLocation = child:GetPivot().Position
+                    return cachedGeneratorLocation
+                end
+            end
+        end
+    end
+    local fallbackGen = Workspace:FindFirstChild("Generator", true)
+    if fallbackGen then
+        cachedGeneratorLocation = fallbackGen:GetPivot().Position
+        return cachedGeneratorLocation
+    end
+    return nil
+end
+ 
+local function FuelTeleport(hrp, targetFuel)
+    local generatorLoc = getGeneratorPosition()
+    if not hrp or not targetFuel or not generatorLoc then return end
+ 
+    local fuelUnion = targetFuel:FindFirstChild("Union") or targetFuel.PrimaryPart
+    local itemDrag = targetFuel:FindFirstChild("ItemDrag")
+    local networkRemote = itemDrag and itemDrag:FindFirstChild("RequestNetworkOwnership")
+ 
+    if fuelUnion and networkRemote then
+        pcall(function()
+            networkRemote:FireServer(fuelUnion)
+        end)
+        task.wait(0.12) 
+        pcall(function()
+            targetFuel:PivotTo(CFrame.new(generatorLoc) + Vector3.new(0, 1, 0))
+        end)
+        task.wait(0.15) 
+    end
+end
+ 
+local function adaptiveCrawlTo(targetPos, humanoidRootPart, character)
+    local finalTarget = targetPos + Vector3.new(0, 3, 0)
+ 
+    local BURST_SPEED = 75
+    local SLOW_SPEED = 7
+    local CLEARANCE_COOLDOWN = 0.5  
+    local SLOW_ZONE_DURATION = 0.35
+    local lastWallDetectedTime = 0
+    local lockedYHeight = humanoidRootPart.Position.Y
+ 
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = {character} 
+ 
+    local heartbeatEvent = RunService.Heartbeat
+ 
+    while true do
+        if not humanoidRootPart or not humanoidRootPart.Parent then break end
+ 
+        local deltaTime = heartbeatEvent:Wait()
+ 
+        local currentPos = humanoidRootPart.Position
+        local flatTarget = Vector3.new(finalTarget.X, lockedYHeight, finalTarget.Z)
+        local remainingVector = flatTarget - currentPos
+        local totalDistance = remainingVector.Magnitude
+ 
+        if totalDistance <= 2.0 then
+            humanoidRootPart.CFrame = CFrame.new(finalTarget)
+            humanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, -5, 0) 
+            humanoidRootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            humanoidRootPart.Anchored = true
+            task.wait(0.05)
+            humanoidRootPart.Anchored = false 
+            break
+        end
+ 
+        local direction = remainingVector.Unit
+        local lookAheadDistance = 5
+        local rayResult = workspace:Raycast(currentPos, direction * lookAheadDistance, raycastParams)
+ 
+        if rayResult and rayResult.Instance and rayResult.Instance.CanCollide then
+            lastWallDetectedTime = os.clock()
+        end
+ 
+        local currentAllowedSpeed = SLOW_SPEED
+ 
+        if os.clock() - lastWallDetectedTime >= CLEARANCE_COOLDOWN then
+            local serverTime = workspace:GetServerTimeNow()
+            local currentSecondFract
